@@ -1,59 +1,72 @@
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional
-from .email_sender import EmailSender
-import json
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.application import MIMEApplication
 
 app = FastAPI()
 
-# CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://excel2report.streamlit.app"],  # Streamlit 앱 URL
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Gmail API 클라이언트 초기화
-email_sender = None
-
 @app.post("/send-email")
 async def send_email(
-    background_tasks: BackgroundTasks,
     to_email: str = Form(...),
     creator_name: str = Form(...),
     report_file: UploadFile = File(...),
-    credentials_file: UploadFile = File(...)
+    email_user: str = Form(...),    # Gmail 계정
+    email_password: str = Form(...) # Gmail 앱 비밀번호
 ):
     try:
-        # credentials 파일 읽기
-        credentials_content = await credentials_file.read()
+        # 이메일 설정
+        smtp_server = "smtp.gmail.com"
+        smtp_port = 587
         
-        # 보고서 파일 읽기
+        # 이메일 메시지 생성
+        message = MIMEMultipart()
+        message["From"] = email_user
+        message["To"] = to_email
+        message["Subject"] = f"{creator_name} 크리에이터님의 음원 사용현황 보고서"
+
+        # 이메일 본문
+        body = f"""안녕하세요, {creator_name} 크리에이터님
+
+첨부된 파일을 통해 음원 사용현황을 확인해주세요.
+문의사항이 있으시면 언제든 연락 주시기 바랍니다.
+
+감사합니다."""
+        
+        message.attach(MIMEText(body, "plain"))
+
+        # 첨부 파일 추가
         report_content = await report_file.read()
-        
-        # EmailSender 초기화
-        global email_sender
-        email_sender = EmailSender(credentials_content)
-        
-        # 백그라운드에서 이메일 전송
-        background_tasks.add_task(
-            email_sender.send_report,
-            to_email=to_email,
-            creator_name=creator_name,
-            report_content=report_content
+        attachment = MIMEApplication(report_content, _subtype="html")
+        attachment.add_header(
+            "Content-Disposition", "attachment", 
+            filename=f"{creator_name}_report.html"
         )
-        
-        return {
-            "status": "success",
-            "message": f"이메일 발송이 시작되었습니다. ({to_email})"
-        }
-        
+        message.attach(attachment)
+
+        # 이메일 발송
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(email_user, email_password)
+            server.send_message(message)
+
+        return {"status": "success", "message": "이메일이 성공적으로 발송되었습니다."}
+
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(
+            status_code=500, 
+            detail=f"이메일 발송 실패: {str(e)}"
+        )
 
 @app.get("/health")
-async def health_check():
+def health_check():
     return {"status": "healthy"}
