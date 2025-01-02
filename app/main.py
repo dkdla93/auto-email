@@ -1,76 +1,59 @@
-from fastapi import FastAPI, HTTPException, UploadFile, Form, File
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from typing import Optional
-import json
 from .email_sender import EmailSender
+import json
 
-app = FastAPI(title="Email Service API")
+app = FastAPI()
 
 # CORS 설정
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://excel2report.streamlit.app"],  # Streamlit 앱 URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-@app.post("/initialize-auth")
-async def initialize_auth(client_secrets: UploadFile = File(...)):
-    """Gmail API 인증 초기화"""
-    try:
-        contents = await client_secrets.read()
-        client_secrets_data = json.loads(contents)
-        
-        email_sender = EmailSender(client_secrets_data)
-        auth_url, flow = email_sender.get_authorization_url()
-        
-        return {
-            "auth_url": auth_url,
-            "message": "Please visit this URL to authorize the application"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# Gmail API 클라이언트 초기화
+email_sender = None
 
 @app.post("/send-email")
 async def send_email(
-    client_secrets: UploadFile = File(...),
-    auth_code: str = Form(...),
+    background_tasks: BackgroundTasks,
     to_email: str = Form(...),
     creator_name: str = Form(...),
-    report_file: UploadFile = Form(...),
-    report_type: str = Form(default="html")
+    report_file: UploadFile = File(...),
+    credentials_file: UploadFile = File(...)
 ):
-    """이메일 발송"""
     try:
-        # client_secrets 읽기
-        contents = await client_secrets.read()
-        client_secrets_data = json.loads(contents)
-        
-        # EmailSender 초기화 및 인증
-        email_sender = EmailSender(client_secrets_data)
-        flow = email_sender.initialize_flow()
-        credentials = email_sender.get_credentials_from_code(auth_code, flow)
+        # credentials 파일 읽기
+        credentials_content = await credentials_file.read()
         
         # 보고서 파일 읽기
         report_content = await report_file.read()
         
-        # 이메일 발송
-        result = await email_sender.send_report(
-            credentials=credentials,
+        # EmailSender 초기화
+        global email_sender
+        email_sender = EmailSender(credentials_content)
+        
+        # 백그라운드에서 이메일 전송
+        background_tasks.add_task(
+            email_sender.send_report,
             to_email=to_email,
             creator_name=creator_name,
-            report_content=report_content,
-            report_type=report_type
+            report_content=report_content
         )
         
-        return result
-    
+        return {
+            "status": "success",
+            "message": f"이메일 발송이 시작되었습니다. ({to_email})"
+        }
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 async def health_check():
-    """헬스 체크 엔드포인트"""
     return {"status": "healthy"}
