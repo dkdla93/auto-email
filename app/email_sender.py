@@ -1,36 +1,29 @@
+import json
 from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.application import MIMEApplication
 import base64
-from .config import settings
-
-SCOPES = ['https://www.googleapis.com/auth/gmail.send']
 
 class EmailSender:
-    def __init__(self):
-        self.creds = None
-        self.initialize_credentials()
-
-    def initialize_credentials(self):
+    def __init__(self, credentials_content):
         """Gmail API 인증 초기화"""
-        self.creds = Credentials(
-            None,
-            refresh_token=settings.GOOGLE_REFRESH_TOKEN,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=settings.GOOGLE_CLIENT_ID,
-            client_secret=settings.GOOGLE_CLIENT_SECRET,
-            scopes=SCOPES
-        )
+        self.credentials_info = json.loads(credentials_content)
+        self.creds = None
+        self._setup_credentials()
 
-        if self.creds and self.creds.expired and self.creds.refresh_token:
-            self.creds.refresh(Request())
+    def _setup_credentials(self):
+        """Credentials 설정"""
+        try:
+            self.creds = Credentials.from_authorized_user_info(
+                self.credentials_info,
+                ['https://www.googleapis.com/auth/gmail.send']
+            )
+        except Exception as e:
+            raise Exception(f"Credentials 설정 실패: {str(e)}")
 
-    async def send_report(self, to_email: str, creator_name: str, report_content: bytes, 
-                         report_type: str = 'html'):
+    async def send_report(self, to_email: str, creator_name: str, report_content: bytes):
         """보고서를 첨부하여 이메일 발송"""
         try:
             service = build('gmail', 'v1', credentials=self.creds)
@@ -49,9 +42,9 @@ class EmailSender:
             message.attach(MIMEText(body, 'plain'))
 
             # 보고서 첨부
-            report = MIMEApplication(report_content, _subtype=report_type)
+            report = MIMEApplication(report_content, _subtype='html')
             report.add_header('Content-Disposition', 'attachment', 
-                            filename=f'{creator_name}_report.{report_type}')
+                            filename=f'{creator_name}_report.html')
             message.attach(report)
 
             raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode('utf-8')
@@ -61,7 +54,7 @@ class EmailSender:
                 body={'raw': raw_message}
             ).execute()
 
-            return {"status": "success", "message": f"이메일이 성공적으로 발송되었습니다. ({to_email})"}
+            return True
 
         except Exception as e:
-            return {"status": "error", "message": f"이메일 발송 실패: {str(e)}"}
+            raise Exception(f"이메일 발송 실패: {str(e)}")
